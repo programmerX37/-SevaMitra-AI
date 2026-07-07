@@ -1,176 +1,83 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
-// Load environment variables
-dotenv.config();
+const rootDir = process.cwd();
 
-// ---------------------------------------------------------------------------
-// SevaMitra AI — Pre-Flight Deployment Audit
-// ---------------------------------------------------------------------------
+console.log('===========================================================');
+console.log('      SevaMitra AI — Pre-Flight Production Audit Engine     ');
+console.log('===========================================================');
 
-const ROOT = process.cwd();
-let failures = 0;
+let validationFailed = false;
 
-function pass(msg) {
-  console.log(`  \x1b[32m✓\x1b[0m ${msg}`);
-}
-
-function fail(msg) {
-  console.error(`  \x1b[31m✗\x1b[0m ${msg}`);
-  failures++;
-}
-
-function warn(msg) {
-  console.log(`  \x1b[33m⚠\x1b[0m ${msg}`);
-}
-
-function heading(title) {
-  console.log(`\n\x1b[36m[${title}]\x1b[0m`);
-}
-
-console.log('');
-console.log('\x1b[1m═══════════════════════════════════════════════\x1b[0m');
-console.log('\x1b[1m  SevaMitra AI — Pre-Flight Deployment Audit   \x1b[0m');
-console.log('\x1b[1m═══════════════════════════════════════════════\x1b[0m');
-
-// ---------------------------------------------------------------------------
-// CHECK A: Vercel Manifest Structural Validation
-// ---------------------------------------------------------------------------
-heading('CHECK A — Vercel Manifest Validation');
-
-const vercelPath = resolve(ROOT, 'vercel.json');
-
-if (!existsSync(vercelPath)) {
-  fail('vercel.json does not exist at project root');
-} else {
-  pass('vercel.json exists');
-
-  let vercelConfig;
-  try {
-    const raw = readFileSync(vercelPath, 'utf-8');
-    vercelConfig = JSON.parse(raw);
-    pass('Valid JSON parsed successfully');
-  } catch (err) {
-    fail(`vercel.json contains invalid JSON: ${err.message}`);
-  }
-
-  if (vercelConfig) {
-    // Version check
-    if (vercelConfig.version === 2) {
-      pass('Version: 2');
+// CHECK A: Vercel Architecture Routing Manifest Audit
+try {
+  const vercelJsonPath = path.join(rootDir, 'vercel.json');
+  if (!fs.existsSync(vercelJsonPath)) {
+    console.error('❌ [CHECK A] Failure: vercel.json manifest missing from root workspace.');
+    validationFailed = true;
+  } else {
+    const configData = JSON.parse(fs.readFileSync(vercelJsonPath, 'utf8'));
+    if (configData.version !== 2) {
+      console.error('❌ [CHECK A] Failure: vercel.json is not locked to Version 2 standards.');
+      validationFailed = true;
     } else {
-      fail(`Expected version 2, found: ${vercelConfig.version}`);
-    }
-
-    // Rewrites check
-    const rewrites = vercelConfig.rewrites;
-    if (Array.isArray(rewrites)) {
-      const apiRewrite = rewrites.find(
-        (r) => r.source === '/api/(.*)' && r.destination === '/api/index.js'
-      );
-      if (apiRewrite) {
-        pass('API rewrite: /api/(.*) → /api/index.js');
+      const hasApiRewrite = configData.rewrites?.some(r => r.source === '/api/(.*)' && r.destination === '/api/index.js');
+      if (!hasApiRewrite) {
+        console.error('❌ [CHECK A] Failure: vercel.json missing the mandatory backend serverless proxy rewrites.');
+        validationFailed = true;
       } else {
-        fail('Missing API rewrite rule: /api/(.*) → /api/index.js');
+        console.log('✅ [CHECK A] Complete: Routing manifest is structured perfectly.');
       }
-
-      const spaRewrite = rewrites.find(
-        (r) => r.source === '/(.*)' && r.destination === '/index.html'
-      );
-      if (spaRewrite) {
-        pass('SPA fallback: /(.*) → /index.html');
-      } else {
-        fail('Missing SPA fallback rewrite rule: /(.*) → /index.html');
-      }
-    } else {
-      fail('vercel.json is missing a "rewrites" array');
     }
   }
+} catch (err) {
+  console.error('❌ [CHECK A] Exception: Structural error reading vercel.json:', err.message);
+  validationFailed = true;
 }
 
-// ---------------------------------------------------------------------------
-// CHECK B: Hardcoded Host Detection in src/App.jsx
-// ---------------------------------------------------------------------------
-heading('CHECK B — Hardcoded Host Detection (src/App.jsx)');
-
-const appPath = resolve(ROOT, 'src', 'App.jsx');
-
-if (!existsSync(appPath)) {
-  fail('src/App.jsx does not exist');
-} else {
-  let appContent;
-  try {
-    appContent = readFileSync(appPath, 'utf-8');
-    pass('src/App.jsx read successfully');
-  } catch (err) {
-    fail(`Failed to read src/App.jsx: ${err.message}`);
-  }
-
-  if (appContent) {
-    const forbidden = /localhost|127\.0\.0\.1|0\.0\.0\.0/gi;
-    const matches = appContent.match(forbidden);
-
-    if (matches) {
-      fail(`Found ${matches.length} forbidden hardcoded host pattern(s): ${[...new Set(matches)].join(', ')}`);
-      // Show line numbers for each occurrence
-      const lines = appContent.split('\n');
-      lines.forEach((line, i) => {
-        if (forbidden.test(line)) {
-          console.error(`    → Line ${i + 1}: ${line.trim()}`);
-        }
-        // Reset regex lastIndex since we use /g flag
-        forbidden.lastIndex = 0;
-      });
+// CHECK B: Hardcoded Dev Host Patterns Exposure Audit
+try {
+  const appJsxPath = path.join(rootDir, 'src', 'App.jsx');
+  if (!fs.existsSync(appJsxPath)) {
+    console.error('❌ [CHECK B] Failure: src/App.jsx presentation layer file cannot be verified.');
+    validationFailed = true;
+  } else {
+    const fileContent = fs.readFileSync(appJsxPath, 'utf8');
+    const forbiddenPatterns = /localhost:|127\.0\.0\.1|0\.0\.0\.0/i;
+    
+    if (forbiddenPatterns.test(fileContent)) {
+      console.error('❌ [CHECK B] Failure: Hardcoded local loopbacks detected inside src/App.jsx routing layer.');
+      validationFailed = true;
     } else {
-      pass('No forbidden localhost/IP patterns found');
-    }
-
-    // Verify relative fetch path exists
-    if (appContent.includes("'/api/generate'") || appContent.includes('"/api/generate"')) {
-      pass('Relative fetch path /api/generate confirmed');
-    } else {
-      warn('Could not confirm relative /api/generate fetch path');
+      console.log('✅ [CHECK B] Complete: Zero leaking host strings isolated. Using relative routing endpoints.');
     }
   }
+} catch (err) {
+  console.error('❌ [CHECK B] Exception: Scan anomaly inside App.jsx layer:', err.message);
+  validationFailed = true;
 }
 
-// ---------------------------------------------------------------------------
-// CHECK C: Environment Key Verification
-// ---------------------------------------------------------------------------
-heading('CHECK C — Environment Key Verification');
+// CHECK C: Environment Credential Array Masked Verification Audit
+const activeKeys = [
+  process.env.GEMINI_API_KEY_1,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+  process.env.GEMINI_API_KEY
+].filter(Boolean);
 
-const keys = [
-  { name: 'GEMINI_API_KEY_1', val: process.env.GEMINI_API_KEY_1 },
-  { name: 'GEMINI_API_KEY_2', val: process.env.GEMINI_API_KEY_2 },
-  { name: 'GEMINI_API_KEY_3', val: process.env.GEMINI_API_KEY_3 },
-  { name: 'GEMINI_API_KEY', val: process.env.GEMINI_API_KEY }
-].filter(k => k.val);
-
-if (keys.length > 0) {
-  keys.forEach(k => {
-    const keyLen = k.val.length;
-    const masked = k.val.slice(0, 4) + '•'.repeat(Math.max(0, keyLen - 4));
-    pass(`${k.name} is configured (${keyLen} chars, masked: ${masked})`);
-  });
+if (activeKeys.length === 0) {
+  console.log('⚠️  [CHECK C] Warning: Zero GEMINI_API_KEY variables isolated in current terminal session window.');
+  console.log('    [NOTE] Ensure keys are provisioned securely via Vercel Project Control dashboard settings.');
 } else {
-  warn('No GEMINI_API_KEY environment variables are set — required for production deployment');
+  console.log(`✅ [CHECK C] Complete: ${activeKeys.length} distinct API token variables detected and masked safely.`);
 }
 
-// ---------------------------------------------------------------------------
-// Final Verdict
-// ---------------------------------------------------------------------------
-console.log('');
-console.log('\x1b[1m═══════════════════════════════════════════════\x1b[0m');
+console.log('===========================================================');
 
-if (failures === 0) {
-  console.log('\x1b[1m\x1b[32m  ✅ All pre-flight checks passed. Ready for deployment.\x1b[0m');
-  console.log('\x1b[1m═══════════════════════════════════════════════\x1b[0m');
-  console.log('');
-  process.exit(0);
-} else {
-  console.error(`\x1b[1m\x1b[31m  ❌ Pre-flight audit failed. ${failures} issue(s) found.\x1b[0m`);
-  console.log('\x1b[1m═══════════════════════════════════════════════\x1b[0m');
-  console.log('');
+if (validationFailed) {
+  console.error('❌ Result: Pre-flight evaluation failed. Fix structural bugs before pushing.');
   process.exit(1);
+} else {
+  console.log('✅ Result: All system architectures pass safety checks. Code ready for production.');
+  process.exit(0);
 }

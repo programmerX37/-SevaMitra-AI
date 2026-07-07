@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 # Antigravity artifacts and credentials
 .gemini
 *.log
+
+.vercel
+.env*
