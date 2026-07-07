@@ -4,6 +4,10 @@ import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
+// In-memory query cache container (valid for warm containers, max 5 min lifetime)
+const queryCache = new Map();
+
+
 const app = express();
 app.use(express.json());
 
@@ -19,7 +23,13 @@ if (GEMINI_KEYS.length === 0 && process.env.GEMINI_API_KEY) {
   GEMINI_KEYS.push(process.env.GEMINI_API_KEY);
 }
 
-// Context Engineering System Instructions Matrix
+/**
+ * Context Engineering System Instructions Matrix generator
+ * 
+ * @param {string} contextType - The selected Kendra tab desk context (seva, dastavez, shikayat).
+ * @param {string} language - The localized language script string context (Hindi, English).
+ * @returns {string} The fully composed system instruction string containing context rules and language guardrails.
+ */
 function buildSystemInstruction(contextType, language) {
   let baseInstruction = '';
   
@@ -35,7 +45,13 @@ function buildSystemInstruction(contextType, language) {
   return `${baseInstruction}\n\nCRITICAL MANDATE: You MUST formulate your entire response, including all headings, checklist markers, descriptions, and labels, using the exact language script specified by the citizen: ${language}. Maintain absolute factual reliability. Do not hallucinate guidelines or deadlines. Set formatting using clear Markdown layout rules.`;
 }
 
-// Liveness Health Check Probe
+/**
+ * Liveness Health Check Probe route handler.
+ * 
+ * @param {import('express').Request} req - Express incoming request.
+ * @param {import('express').Response} res - Express outgoing response.
+ * @returns {import('express').Response} Liveness status payload.
+ */
 app.get('/api/health', (req, res) => {
   return res.status(200).json({ 
     status: 'healthy', 
@@ -43,7 +59,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Main Token-Rotating Content Generation Pipeline
+/**
+ * Asynchronously processes citizen queries using an automated token rotation loop
+ * with an upstream in-memory cache gate.
+ * 
+ * @param {import('express').Request} req - Express incoming transaction network payload.
+ * @param {import('express').Response} res - Express outgoing server network resolution.
+ * @returns {Promise<import('express').Response>} JSON schema success array or server error.
+ */
 app.post('/api/generate', async (req, res) => {
   const { prompt, contextType = 'seva', language = 'Hindi' } = req.body;
 
@@ -53,6 +76,15 @@ app.post('/api/generate', async (req, res) => {
       error: "Validation failed: 'prompt' is required and must be a non-empty string."
     });
   }
+
+  // Upstream in-memory cache check gate
+  const cacheKey = `${contextType}_${language}_${prompt.trim()}`;
+  const cachedItem = queryCache.get(cacheKey);
+  if (cachedItem && (Date.now() - cachedItem.timestamp < 300000)) {
+    console.log(`[SevaMitra API] Cache HIT for key: ${cacheKey}`);
+    return res.status(200).json({ success: true, text: cachedItem.text });
+  }
+
 
   if (GEMINI_KEYS.length === 0) {
     console.error('[SevaMitra API] Operation aborted: Zero API keys are provisioned.');
@@ -93,6 +125,8 @@ app.post('/api/generate', async (req, res) => {
 
   // Response Dispatch Decision Gate
   if (responseText !== null) {
+    queryCache.set(cacheKey, { text: responseText, timestamp: Date.now() });
+    console.log(`[SevaMitra API] Cache MISS. Result cached for key: ${cacheKey}`);
     return res.status(200).json({ success: true, text: responseText });
   }
 
